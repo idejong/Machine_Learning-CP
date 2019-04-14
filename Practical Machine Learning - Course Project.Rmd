@@ -1,0 +1,168 @@
+---
+title: "Practical Machine Learning - Course Project"
+author: "I_dejong"
+date: "14 april 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(knitr)
+library(ggplot2)
+library(caret)
+library(fastDummies)
+library(corrplot)
+library(randomForest)
+```
+
+
+#### Executive Summary
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity. In this project, data from accelerometers on the belt, forearm, arm, and dumbell of 6 particpants is used. The data is used to build a prediciton model to predict the manner in which the participants did the exercise. 
+
+Using a random forest model, we achieved an accuracy on a held-out test set of X. The expected out of sample error is therefore X.
+20 test cases were all correctly predicted using the final random forest model.
+
+
+#### The data
+Data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants is used. The participants were asked to perform barbell lifts correctly and incorrectly in 5 different ways. This is the "classe" variable in the training set. More information is available from the website here: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+
+#### 1. Loading the data and making a test and training set:
+After loading the data, the first step is to make a training and test set from the labeled data in order to ensure that the test set is held out of any of the data exploration and model building.
+```{r, cache=TRUE}
+# Load the data:
+labeled_data <- read.csv("pml-training.csv")
+test_cases <- read.csv("pml-testing.csv")
+
+# Make a training and a test set out of the labeled training data:
+inTrain <- createDataPartition(y=labeled_data$classe, p=0.60, list=FALSE)
+training <- labeled_data[inTrain,]
+testing <- labeled_data[-inTrain,]
+```
+
+
+#### 2. Exploratory analysis
+We explore the outcome variable 'classe' as well as the correlations between outcome variable 'classe' and the predictors: 
+```{r, cache=TRUE, fig.width=6, fig.height=4}
+## Expore the outcome variable 'classe'
+ggplot(data = training, aes(x=training$user_name, fill=training$classe)) + 
+    geom_bar(stat="count") + xlab("User") + 
+    scale_fill_discrete(name = "Classe") +
+    ggtitle("Counts of the occurences of each classe per user")
+```
+
+```{r, cache=TRUE, fig.width=15, fig.height=4}
+# Explore the correlations between outcome variable 'classe' and the predictors:
+# First we make dummy variables from the classe  variable inorder to explore
+# the correlations:
+dummies <- dummy_cols(training$classe)
+colnames(dummies) <- c("classe", "classe_A", "classe_B", "classe_C", "classe_D", 
+                      "classe_E")
+# Add the dummy variables to the numeric predictors from the training set:
+training_viz <- cbind(training[sapply(training,is.numeric)], dummies[,-1])
+
+# Make a correlation matrix:
+M <- cor(training_viz)
+# Select as columns the outcome variables:
+M <- M[,which(colnames(M) %in% c("classe", "classe_A", "classe_B", "classe_C", 
+                                 "classe_D", "classe_E"))]
+# Select as rows the predictors (remove the variables that are not from the 
+# accelerometers data), and those that are all NA's:
+remov_rows <- c("X", "user_name", "raw_timestamp_part_1", 
+                "raw_timestamp_part_2", "cvtd_timestamp", 
+                "new_window","num_window", "classe", "classe_A", "classe_B", 
+                "classe_C", "classe_D", "classe_E")
+M <- M[-which(rownames(M) %in% remov_rows),]
+M <- na.omit(M)
+
+# Plot the resulting correlation matrix:
+corrplot(t(M), method = "square", tl.col="black")
+```
+
+
+#### 3. Data preprocessing
+In the data preprocessing, we remove columns that are not containing accelerometer data such as the row indexes and the user names. In addition, we reduce dimensionality by remove predictors that are all or almost all NA's, as well as those containing little variability. 
+
+```{r, cache=TRUE}
+# Removing nearZero Covariates
+nZvar <- nearZeroVar(training)
+training <- training[, -nZvar]
+testing <- testing[, -nZvar]
+
+# Remove variables that are for more than 90 percent NA:
+empty <- (sapply(training, function(x) mean(is.na(x))) > 0.90)
+training <- training[, empty==FALSE]
+testing <- testing[, empty==FALSE]
+
+# Remove additional columns that are not accelerometers data:
+remov_cols <- c("X", "user_name", "raw_timestamp_part_1", 
+                "raw_timestamp_part_2", "cvtd_timestamp", 
+                "new_window","num_window")
+training <- training[, !colnames(training) %in% remov_cols]
+testing <- testing[, !colnames(testing) %in% remov_cols]
+
+```
+
+
+
+#### 4. Model building
+We will fit multiple machine learning models that are especially fit for classification problems of categorical outcome variables, namely a decision tree, a random forest, and boosted trees. We will evaluate models based on the accuracy: the chance of a correct outcome, and choose the model with the highest accuracy. 
+
+##### Cross validation
+Each model is fit on the training set using 5-fold cross validation. The models are evaluated on the held-out fold in the 5-fold cross validation in order to estimate the accuracy of the models.  
+
+```{r, cache=TRUE}
+# Start by specifying the k-fold crossvalidation with K=5:
+train_control <- trainControl(method="cv", number=5)
+
+# Fit the decision tree model and save its accuracy:
+model_rpart <- train(classe~., data=training, trControl=train_control, method="rpart")
+model_rpart_acc <- max(model_rpart$results$Accuracy)
+
+# Fit the random forest model and save its accuracy:
+model_rf <- train(classe~., data=training, trControl=train_control, method="rf")
+model_rf_acc <- max(model_rf$results$Accuracy)
+
+# Fit the boosted trees model and save its accuracy:
+model_gbm <- train(classe~., data=training, trControl=train_control, 
+                   method="gbm", verbose = FALSE)
+model_gbm_acc <- tail(model_gbm$results$Accuracy, n=1)
+
+```
+The accuracy of the decision tree model is estimated at: `r format(model_rpart_acc , scientific=FALSE)`, the accuracy of the random forest model is estimated at: `r format(model_rf_acc , scientific=FALSE)`, and the accuracy of the boosted trees model is estimated at: `r format(model_gbm_acc , scientific=FALSE)`. The highest accuracy is achieved with the random forest model. 
+
+
+#### 5. Model evaluation (Expected out of sample error)
+Caret, by default also generates the final model with all the training data provided. We can find the finalmodel of the random forest model using finalModel. 
+
+To evaluate our final model we estimate the out of sample error of the final model using the test dataset. The test dataset has not been used in the training of the model. The out of sample error is equal to 1 minus the accuracy of the final model. 
+
+```{r, cache=TRUE}
+final_acc <- confusionMatrix(testing$classe,
+                             predict(model_rf$finalModel, testing))$overall[1]
+error <- 1-final_acc
+```
+
+The accuracy of the final model is estimated at `r format(final_acc, scientific=FALSE)`. The expected out of sample error is 1 minus the accuracy which is `r format(error, scientific=FALSE)`.
+
+
+#### 6. Test cases
+The provided test cases are stored in the dataframe test_cases. We will use the final random forest model to predict the classes of each of the 20 cases.
+```{r, cache=TRUE}
+# First the same preprocessing steps are performed to the test_cases as has 
+# been done to the training and test data used to build the random forest model
+# Removing nearZero Covariates
+test_cases <- test_cases[, -nZvar]
+# Remove variables that are for more than 90 percent NA in the training set:
+test_cases <- test_cases[, empty==FALSE]
+
+# Remove additional columns that are not accelerometers data:
+test_cases <- test_cases[, !colnames(testing) %in% remov_cols]
+
+# Use the predict function and the final random forest model to predict each 
+# case.
+predict(model_rf$finalModel, test_cases)
+```
+
+The test cases are checked in the Course Project Prediction Quiz and have all been correctly classified. 

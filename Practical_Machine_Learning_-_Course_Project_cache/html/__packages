@@ -1,0 +1,8 @@
+base
+knitr
+ggplot2
+lattice
+caret
+fastDummies
+corrplot
+randomForest
